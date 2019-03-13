@@ -22,46 +22,78 @@ namespace OcrFunctions
 
         private static HttpClient _httpClient = null;
 
+        private static string[] allowedFileExtensions = new string[] { ".pdf", ".png", ".jpg", ".jpeg" };
 
+
+        /// <summary>
+        /// Azure Function that is triggerd by a new file in blob storage,
+        /// sends the document to the Azure Cognitive Service for Optical Character Recognition (OCR)
+        /// and stores the resulting text on the blob storage as well in .txt files
+        /// </summary>
+        /// <param name="inputBlob"></param>
+        /// <param name="outputBlobContainer"></param>
+        /// <param name="name"></param>
+        /// <param name="log"></param>
+        /// <returns></returns>
         [FunctionName("OcrPdf")]
         public static async Task Run(
-            [BlobTrigger("ocr/input/{name}", Connection = "BlobConnectionString")]CloudBlockBlob myBlob,
-            [Blob("ocr/output/{name}_{DateTime}.txt", FileAccess.Write, Connection = "BlobConnectionString")] CloudBlockBlob resultTextFileBlob,
+            [BlobTrigger("ocr/input/{name}", Connection = "BlobConnectionString")]CloudBlockBlob inputBlob,
+            [Blob("ocr", FileAccess.Read, Connection = "BlobConnectionString")] CloudBlobContainer outputBlobContainer,
             string name,
             ILogger log)
         {
+            if (!allowedFileExtensions.Contains(Path.GetExtension(name)?.ToLower()))
+            {
+                log.LogWarning($"Ignoring file {name} with unsupported file extension");
+                return;
+            }
+
             log.LogInformation($"New blob detected: '{name}'. Calling OCR for this document...");
 
             try
             {
-                // Generate a read-only SAS token for the document to be passed to the OCR engine
-                var sasPolicy = new SharedAccessBlobPolicy()
-                {
-                    Permissions = SharedAccessBlobPermissions.Read,
-                    SharedAccessStartTime = new DateTimeOffset(DateTime.UtcNow),
-                    SharedAccessExpiryTime = new DateTimeOffset(DateTime.UtcNow.AddMinutes(10))
-                };
-                var sasToken = myBlob.GetSharedAccessSignature(sasPolicy);
-
                 // Init http client
                 if (_httpClient == null)
                 {
                     _httpClient = new HttpClient();
+                    // Add API key for Azure Cognitive Service in the header
                     _httpClient.DefaultRequestHeaders.Add("Ocp-Apim-Subscription-Key", config["CognitiveServiceApiKey"]);
                 }
 
+                // Generate a read-only, short living SAS token for the document to be passed to the OCR engine
+                var sasPolicy = new SharedAccessBlobPolicy()
+                {
+                    Permissions = SharedAccessBlobPermissions.Read,
+                    SharedAccessStartTime = new DateTimeOffset(DateTime.UtcNow),
+                    SharedAccessExpiryTime = new DateTimeOffset(DateTime.UtcNow.AddMinutes(5))
+                };
+                var sasToken = inputBlob.GetSharedAccessSignature(sasPolicy);
+
                 // Make Ocr Read request
                 // This request is async and will only return an URL for us to retrieve the status and result of the request
-                var resultCheckUrl = await MakeOCRRequest(myBlob.Uri.ToString() + sasToken, log);
+                var resultCheckUrl = await MakeOCRRequest(inputBlob.Uri.ToString() + sasToken, log);
 
                 // Check the status URL until we get a result or time out
                 var ocrResult = await GetOcrRequestResult(resultCheckUrl, log);
 
-                log.LogInformation("Recognized Text:");
-                log.LogInformation(ocrResult.Text);
+                log.LogInformation($"Recognized text on {ocrResult.recognitionResults.Length} pages");
+                log.LogDebug(ocrResult.Text);
 
-                // Write output txt file to blob storage
-                await resultTextFileBlob.UploadTextAsync(ocrResult.Text);
+                var filename = Path.GetFileNameWithoutExtension(name);
+                var fileBaseName = $"output/{ filename }_{ DateTime.UtcNow.ToString("yyyy-MM-ddThh-mm-ss") }";
+
+                // Write full output txt file to blob storage
+                var fullResultBlob = outputBlobContainer.GetBlockBlobReference($"{fileBaseName}_full.txt");
+                await fullResultBlob.UploadTextAsync(ocrResult.Text);
+
+                // Write each page seperatly as well
+                foreach (var page in ocrResult.recognitionResults)
+                {
+                    var pageResultBlob = outputBlobContainer.GetBlockBlobReference($"{fileBaseName}_page{ string.Format("{0:000}", page.page) }.txt");
+                    await pageResultBlob.UploadTextAsync(page.Text);
+                }
+
+                log.LogInformation("Processing of document completed. Results uploaded to blob storage");
             }
             catch (Exception e)
             {
@@ -79,11 +111,12 @@ namespace OcrFunctions
             string uriReadAsync = config["cognitiveServiceBaseUri"] + "/vision/v2.0/read/core/asyncBatchAnalyze";
 
             // Request mode parameter. Can be "Handwritten" or "Printed"
-            string requestParameters = "mode=" + config["ocrMode"];
+            string requestParameters = "?mode=" + config["ocrMode"];
 
             // Assemble the URI for the REST API method.
-            string uri = uriReadAsync + "?" + requestParameters;
+            string uri = uriReadAsync + requestParameters;
 
+            // Put the image URL into the JSON payload
             var requestJson = "{\"url\": \"" + imageUrl + "\" }";
 
             // Add the byte array as an octet stream to the request body.
@@ -143,7 +176,7 @@ namespace OcrFunctions
                     if (counter >= int.Parse(config["ocrMaxRetries"]))
                         break;
 
-                    log.LogInformation("Waiting for OCR to finished...");
+                    log.LogInformation("Waiting for OCR to finish ...");
                     // Wait for X seconds and try again
                     await Task.Delay(int.Parse(config["ocrRetrySeconds"]) * 1000);
                 }
@@ -197,7 +230,7 @@ namespace OcrFunctions
                     {
                         sb.Append("\n");
                     }
-                    else
+                    else if (sb.Length > 0)
                     {
                         sb.Append(" ");
                     }
