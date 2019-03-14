@@ -1,14 +1,14 @@
+using Microsoft.Azure.WebJobs;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Microsoft.WindowsAzure.Storage.Blob;
 using System;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Text;
+using OcrFunctions.Model;
 using System.Threading.Tasks;
-using Microsoft.Azure.WebJobs;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
-using Microsoft.WindowsAzure.Storage.Blob;
 
 namespace OcrFunctions
 {
@@ -22,7 +22,7 @@ namespace OcrFunctions
 
         private static HttpClient _httpClient = null;
 
-        private static string[] allowedFileExtensions = new string[] { ".pdf", ".png", ".jpg", ".jpeg" };
+        private static readonly string[] allowedFileExtensions = new string[] { ".pdf", ".png", ".jpg", ".jpeg" };
 
 
         /// <summary>
@@ -42,6 +42,7 @@ namespace OcrFunctions
             string name,
             ILogger log)
         {
+            // Check if file extension is in the supported list
             if (!allowedFileExtensions.Contains(Path.GetExtension(name)?.ToLower()))
             {
                 log.LogWarning($"Ignoring file {name} with unsupported file extension");
@@ -76,20 +77,20 @@ namespace OcrFunctions
                 // Check the status URL until we get a result or time out
                 var ocrResult = await GetOcrRequestResult(resultCheckUrl, log);
 
-                log.LogInformation($"Recognized text on {ocrResult.recognitionResults.Length} pages");
+                log.LogInformation($"Recognized text on {ocrResult.Pages.Length} pages");
                 log.LogDebug(ocrResult.Text);
 
-                var filename = Path.GetFileNameWithoutExtension(name);
-                var fileBaseName = $"output/{ filename }_{ DateTime.UtcNow.ToString("yyyy-MM-ddThh-mm-ss") }";
+                var inputFilename = Path.GetFileNameWithoutExtension(name);
+                var fileBaseName = $"output/{ inputFilename }_{ DateTime.UtcNow.ToString("yyyy-MM-ddThh-mm-ss") }";
 
                 // Write full output txt file to blob storage
                 var fullResultBlob = outputBlobContainer.GetBlockBlobReference($"{fileBaseName}_full.txt");
                 await fullResultBlob.UploadTextAsync(ocrResult.Text);
 
                 // Write each page seperatly as well
-                foreach (var page in ocrResult.recognitionResults)
+                foreach (var page in ocrResult.Pages)
                 {
-                    var pageResultBlob = outputBlobContainer.GetBlockBlobReference($"{fileBaseName}_page{ string.Format("{0:000}", page.page) }.txt");
+                    var pageResultBlob = outputBlobContainer.GetBlockBlobReference($"{fileBaseName}_page{ string.Format("{0:000}", page.PageNumber) }.txt");
                     await pageResultBlob.UploadTextAsync(page.Text);
                 }
 
@@ -133,7 +134,7 @@ namespace OcrFunctions
             // header Operation-Location
             if (response.Headers.TryGetValues("Operation-Location", out var values))
             {
-                var opLoc = values.First();
+                var opLoc = values.FirstOrDefault();
                 return opLoc;
             }
             else
@@ -184,77 +185,4 @@ namespace OcrFunctions
             throw new Exception($"Document could not be OCRed before timeout after {counter} retries'");
         }
     }
-
-
-    /// <summary>
-    /// The following classes are the DTO of the OCR response
-    /// </summary>
-    public class ReadResult
-    {
-        public string status { get; set; }
-        public PageRecognitionResult[] recognitionResults { get; set; }
-
-        /// <summary>
-        /// Get text for all pages. Seperated by 3 new lines
-        /// </summary>
-        public string Text
-        {
-            get
-            {
-                return string.Join("\n\n\n", recognitionResults?.Select(r => r.Text));
-            }
-        }
-    }
-
-    public class PageRecognitionResult
-    {
-        public int page { get; set; }
-        public float clockwiseOrientation { get; set; }
-        public float width { get; set; }
-        public float height { get; set; }
-        public string unit { get; set; }
-        public Line[] lines { get; set; }
-
-        /// <summary>
-        /// Get text of the entire page. Tries to align lines if they only slightly differ in vertical position into one line.
-        /// </summary>
-        public string Text
-        {
-            get
-            {
-                StringBuilder sb = new StringBuilder();
-                float? lastTop = null;
-                foreach (Line l in lines)
-                {
-                    if (lastTop != null && (l.boundingBox[1] - lastTop >= 0.2))
-                    {
-                        sb.Append("\n");
-                    }
-                    else if (sb.Length > 0)
-                    {
-                        sb.Append(" ");
-                    }
-                    sb.Append(l.text);
-                    lastTop = l.boundingBox[1];
-                }
-
-                return sb.ToString();
-            }
-        }
-    }
-
-    public class Line
-    {
-        public float[] boundingBox { get; set; }
-        public string text { get; set; }
-        public Word[] words { get; set; }
-    }
-
-    public class Word
-    {
-        public float[] boundingBox { get; set; }
-        public string text { get; set; }
-        public string confidence { get; set; }
-    }
-
 }
