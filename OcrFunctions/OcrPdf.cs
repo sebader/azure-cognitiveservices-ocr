@@ -81,16 +81,17 @@ namespace OcrFunctions
                 log.LogDebug(ocrResult.Text);
 
                 var inputFilename = Path.GetFileNameWithoutExtension(name);
-                var fileBaseName = $"output/{ inputFilename }_{ DateTime.UtcNow.ToString("yyyy-MM-ddThh-mm-ss") }";
+                var fileBaseName = $"{ inputFilename }_{ DateTime.UtcNow.ToString("yyyy-MM-ddThh-mm-ss") }";
+                var outputFolder = $"output/{fileBaseName}/";
 
                 // Write full output txt file to blob storage
-                var fullResultBlob = outputBlobContainer.GetBlockBlobReference($"{fileBaseName}_full.txt");
+                var fullResultBlob = outputBlobContainer.GetBlockBlobReference($"{outputFolder + fileBaseName}_full.txt");
                 await fullResultBlob.UploadTextAsync(ocrResult.Text);
 
                 // Write each page seperatly as well
                 foreach (var page in ocrResult.Pages)
                 {
-                    var pageResultBlob = outputBlobContainer.GetBlockBlobReference($"{fileBaseName}_page{ string.Format("{0:000}", page.PageNumber) }.txt");
+                    var pageResultBlob = outputBlobContainer.GetBlockBlobReference($"{outputFolder + fileBaseName}_page{ string.Format("{0:000}", page.PageNumber) }.txt");
                     await pageResultBlob.UploadTextAsync(page.Text);
                 }
 
