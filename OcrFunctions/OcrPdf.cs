@@ -9,6 +9,8 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using OcrFunctions.Model;
 using System.Threading.Tasks;
+using System.IO.Compression;
+using System.Collections.Generic;
 
 namespace OcrFunctions
 {
@@ -86,13 +88,31 @@ namespace OcrFunctions
 
                 // Write full output txt file to blob storage
                 var fullResultBlob = outputBlobContainer.GetBlockBlobReference($"{outputFolder + fileBaseName}_full.txt");
+                fullResultBlob.Properties.ContentType = "text/plain";
                 await fullResultBlob.UploadTextAsync(ocrResult.Text);
+
+                Dictionary<string, string> allPageFiles = new Dictionary<string, string>();
 
                 // Write each page seperatly as well
                 foreach (var page in ocrResult.Pages)
                 {
-                    var pageResultBlob = outputBlobContainer.GetBlockBlobReference($"{outputFolder + fileBaseName}_page{ string.Format("{0:000}", page.PageNumber) }.txt");
+                    string fileName = $"{fileBaseName}_page{ string.Format("{0:000}", page.PageNumber) }.txt";
+                    allPageFiles.Add(fileName, page.Text);
+
+                    var pageResultBlob = outputBlobContainer.GetBlockBlobReference(outputFolder + fileName);
+                    pageResultBlob.Properties.ContentType = "text/plain";
                     await pageResultBlob.UploadTextAsync(page.Text);
+                }
+
+                // In addition we can write all the text files into one zip file
+                if (config["createResultZip"]?.ToLower() == "true")
+                {
+                    var zipFile = CreateZipFromTexts(allPageFiles);
+                    var zipFileBlob = outputBlobContainer.GetBlockBlobReference($"{outputFolder + fileBaseName}_allPages.zip");
+                    zipFileBlob.Properties.ContentType = "application/zip";
+                    await zipFileBlob.UploadFromFileAsync(zipFile);
+                    // Delete the temp zipfile from disk
+                    File.Delete(zipFile);
                 }
 
                 log.LogInformation("Processing of document completed. Results uploaded to blob storage");
@@ -184,6 +204,32 @@ namespace OcrFunctions
                 }
             }
             throw new Exception($"Document could not be OCRed before timeout after {counter} retries'");
+        }
+
+        /// <summary>
+        /// Package all strings from a collection into text files in one zip archive
+        /// </summary>
+        /// <param name="texts"></param>
+        /// <returns></returns>
+        private static string CreateZipFromTexts(Dictionary<string, string> texts)
+        {
+            // create a temp file name for the zip file
+            string zipFilePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+            using (FileStream zipFile = new FileStream(zipFilePath, FileMode.CreateNew))
+            {
+                using (ZipArchive archive = new ZipArchive(zipFile, ZipArchiveMode.Create))
+                {
+                    foreach (var text in texts)
+                    {
+                        ZipArchiveEntry textFile = archive.CreateEntry(text.Key);
+                        using (StreamWriter writer = new StreamWriter(textFile.Open()))
+                        {
+                            writer.Write(text.Value);
+                        }
+                    }
+                }
+            }
+            return zipFilePath;
         }
     }
 }
