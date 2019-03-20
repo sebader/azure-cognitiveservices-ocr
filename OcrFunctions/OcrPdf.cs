@@ -2,15 +2,15 @@ using Microsoft.Azure.WebJobs;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.WindowsAzure.Storage.Blob;
+using OcrFunctions.Model;
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
-using OcrFunctions.Model;
 using System.Threading.Tasks;
-using System.IO.Compression;
-using System.Collections.Generic;
 
 namespace OcrFunctions
 {
@@ -86,22 +86,18 @@ namespace OcrFunctions
                 var fileBaseName = $"{ inputFilename }_{ DateTime.UtcNow.ToString("yyyy-MM-ddThh-mm-ss") }";
                 var outputFolder = $"output/{fileBaseName}/";
 
-                // Write full output txt file to blob storage
-                var fullResultBlob = outputBlobContainer.GetBlockBlobReference($"{outputFolder + fileBaseName}_full.txt");
-                fullResultBlob.Properties.ContentType = "text/plain";
-                await fullResultBlob.UploadTextAsync(ocrResult.Text);
+                // Add all pages as key-value pairs (Key=filename, Value=text) to new output dict
+                var allPageFiles = ocrResult.Pages.ToDictionary(p => $"{fileBaseName}_page{ string.Format("{0:000}", p.PageNumber) }.txt",p => p.Text);
 
-                Dictionary<string, string> allPageFiles = new Dictionary<string, string>();
+                // Add full output txt file to the list as well
+                allPageFiles.Add($"{fileBaseName}_full.txt", ocrResult.Text);
 
-                // Write each page seperatly as well
-                foreach (var page in ocrResult.Pages)
+                // Write all files to as blobs to storage
+                foreach (var file in allPageFiles)
                 {
-                    string fileName = $"{fileBaseName}_page{ string.Format("{0:000}", page.PageNumber) }.txt";
-                    allPageFiles.Add(fileName, page.Text);
-
-                    var pageResultBlob = outputBlobContainer.GetBlockBlobReference(outputFolder + fileName);
+                    var pageResultBlob = outputBlobContainer.GetBlockBlobReference(outputFolder + file.Key);
                     pageResultBlob.Properties.ContentType = "text/plain";
-                    await pageResultBlob.UploadTextAsync(page.Text);
+                    await pageResultBlob.UploadTextAsync(file.Value);
                 }
 
                 // In addition we can write all the text files into one zip file
