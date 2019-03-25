@@ -37,7 +37,7 @@ namespace OcrFunctions
         /// <param name="name"></param>
         /// <param name="log"></param>
         /// <returns></returns>
-        [FunctionName("OcrPdf")]
+        //[FunctionName("OcrPdf")]
         public static async Task Run(
             [BlobTrigger("ocr/input/{name}", Connection = "BlobConnectionString")]CloudBlockBlob inputBlob,
             [Blob("ocr", FileAccess.Read, Connection = "BlobConnectionString")] CloudBlobContainer outputBlobContainer,
