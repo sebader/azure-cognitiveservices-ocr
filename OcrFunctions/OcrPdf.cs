@@ -83,7 +83,7 @@ namespace OcrFunctions
                 log.LogDebug(ocrResult.Text);
 
                 var inputFilename = Path.GetFileNameWithoutExtension(name);
-                var fileBaseName = $"{ inputFilename }_{ DateTime.UtcNow.ToString("yyyy-MM-ddThh-mm-ss") }";
+                var fileBaseName = $"{ inputFilename }_{ DateTime.UtcNow.ToString("yyyy_MM_ddThh_mm_ss") }";
                 var outputFolder = $"output/{fileBaseName}/";
 
                 // Add all pages as key-value pairs (Key=filename, Value=text) to new output dict
